@@ -1,0 +1,7 @@
+faster-whisper
+edge-tts
+deep-translator
+requests
+aiohttp
+numpy
+truststore

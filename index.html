@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tradutor ao vivo</title>
+<style>
+  :root {
+    --fundo: #101418; --painel: #1a2027; --borda: #2a323c; --texto: #e8edf2;
+    --suave: #8b98a7; --destaque: #3ecf8e; --alerta: #f5b545; --erro: #ef6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fundo); color: var(--texto);
+         font: 16px/1.5 "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px;
+         display: flex; flex-direction: column; gap: 14px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; flex: 1; }
+  #estado { font-size: 13px; padding: 4px 12px; border-radius: 99px;
+            border: 1px solid var(--borda); color: var(--suave); }
+  #estado.ativo { color: var(--destaque); border-color: var(--destaque); }
+  #estado.atrasado { color: var(--alerta); border-color: var(--alerta); }
+  button { font: inherit; font-weight: 600; padding: 10px 22px; border-radius: 8px;
+           border: 0; cursor: pointer; background: var(--destaque); color: #06251a; }
+  button.parar { background: var(--erro); color: #2b0808; }
+  #posicao { font-size: 13px; color: var(--alerta); }
+  button.leve { background: transparent; color: var(--texto); border: 1px solid var(--borda); }
+  .painel { background: var(--painel); border: 1px solid var(--borda);
+            border-radius: 12px; padding: 16px; }
+
+  #palco { position: relative; background: #000; border-radius: 12px; overflow: hidden;
+           aspect-ratio: 16 / 9; display: none; }
+  #palco.ativo { display: block; }
+  #palco video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #legenda { position: absolute; left: 0; right: 0; bottom: 5%; text-align: center;
+             padding: 0 5%; pointer-events: none; }
+  #legenda span { display: inline-block; background: rgba(0,0,0,.78); color: #fff;
+                  font-size: clamp(16px, 2.3vw, 30px); line-height: 1.35;
+                  padding: 4px 14px; border-radius: 6px; }
+  #legenda span:empty { display: none; }
+  #espera { position: absolute; inset: 0; display: flex; align-items: center;
+            justify-content: center; text-align: center; padding: 20px;
+            color: var(--suave); font-size: 18px; background: #000; }
+
+  #palco { cursor: pointer; }
+  #pausado { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px;
+             align-items: center; justify-content: center; background: rgba(0,0,0,.55);
+             color: #fff; font-size: 30px; font-weight: 600; pointer-events: none; }
+  #pausado[hidden] { display: none; }
+  #pausado small { font-size: 15px; font-weight: 400; color: #d5dbe2; }
+
+  .controles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px 20px; }
+  label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--suave); }
+  label.linha { flex-direction: row; align-items: center; gap: 8px; color: var(--texto); font-size: 15px; }
+  select, input[type=range] { width: 100%; accent-color: var(--destaque); }
+  select { font: inherit; padding: 6px 8px; border-radius: 6px; background: var(--fundo);
+           color: var(--texto); border: 1px solid var(--borda); }
+  #medidor { height: 6px; background: var(--fundo); border-radius: 3px; overflow: hidden; }
+  #medidor div { height: 100%; width: 0; background: var(--destaque); transition: width .1s; }
+  #historico { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  .item .pt { font-size: 18px; }
+  .item .en { font-size: 13px; color: var(--suave); }
+  .vazio { color: var(--suave); margin: 8px auto; max-width: 620px; }
+  #aviso { color: var(--alerta); font-size: 14px; min-height: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Tradutor ao vivo · inglês → português</h1>
+    <span id="estado">parado</span>
+    <span id="posicao" hidden></span>
+    <button id="voltar" class="leve" hidden title="Voltar 10 s (seta para a esquerda)">⏪ 10 s</button>
+    <button id="pausa" class="leve" hidden>⏸ Pausar</button>
+    <button id="avancar" class="leve" hidden title="Avançar 10 s (seta para a direita)">10 s ⏩</button>
+    <button id="recente" class="leve" hidden title="Ir para o ponto mais recente da aula">⏭ Mais recente</button>
+    <button id="telaCheia" class="leve" hidden>Tela cheia</button>
+    <button id="botao">Iniciar</button>
+  </header>
+
+  <section id="palco">
+    <video id="video" playsinline></video>
+    <div id="legenda"><span></span></div>
+    <div id="espera"></div>
+    <div id="pausado" hidden>⏸ Pausado<small>clique no vídeo ou aperte Espaço para continuar</small></div>
+  </section>
+
+  <section class="painel controles">
+    <label>Atraso do vídeo: <span id="vAtraso">8.0 s</span>
+      <input id="atraso" type="range" min="3" max="20" step="0.5" value="8">
+    </label>
+    <label>Voz
+      <select id="voz">
+        <option value="pt-BR-FranciscaNeural">Francisca (feminina)</option>
+        <option value="pt-BR-AntonioNeural">Antônio (masculina)</option>
+        <option value="pt-BR-ThalitaMultilingualNeural">Thalita (feminina)</option>      </select>
+    </label>
+    <label>Velocidade mínima da voz: <span id="vVel">1.00x</span>
+      <input id="vel" type="range" min="0.8" max="1.3" step="0.05" value="1">
+    </label>
+    <label>Volume da tradução
+      <input id="volPt" type="range" min="0" max="1" step="0.05" value="1">
+    </label>
+    <label>Volume do áudio original
+      <input id="volEn" type="range" min="0" max="1" step="0.05" value="0.1">
+    </label>
+    <label>Som capturado
+      <div id="medidor"><div></div></div>
+    </label>
+    <label class="linha"><input id="auto" type="checkbox" checked> Aumentar o atraso sozinho se a voz chegar tarde</label>
+    <label class="linha"><input id="falar" type="checkbox" checked> Falar a tradução (desmarque para só legendas)</label>
+  </section>
+
+  <div id="aviso"></div>
+
+  <section class="painel" id="historico">
+    <div class="vazio" id="ajuda">
+      <ol>
+        <li>Abra o curso em outra aba do <b>Chrome</b> ou <b>Edge</b> e dê play no vídeo.</li>
+        <li>Volte aqui, clique em <b>Iniciar</b> e escolha a <b>aba</b> do curso, com
+            <b>“Compartilhar também o áudio da guia”</b> marcado.</li>
+        <li><b>Assista por esta página</b>: o vídeo aparece aqui alguns segundos atrasado,
+            já com a voz em português no tempo certo.</li>
+      </ol>
+      Para pausar, clique no vídeo, use o botão <b>Pausar</b> ou aperte <b>Espaço</b>: a aula
+      continua sendo gravada e, ao continuar, segue de onde você parou.
+      Para voltar ou avançar, use os botões <b>⏪ 10 s</b> e <b>10 s ⏩</b> ou as <b>setas do teclado</b>:
+      dá para voltar até uns 3 minutos e avançar até o ponto mais recente já traduzido.
+      Para pular para outra parte da aula, use a aba do curso.
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const botao = $("botao"), estado = $("estado"), aviso = $("aviso"), historico = $("historico");
+const video = $("video"), legenda = $("legenda").firstElementChild, espera = $("espera");
+
+let ws, stream, ctx, mixador, gravador, fonte, buffer, relogio, rodando = false;
+let pedacos = [];            // partes do vídeo esperando para entrar no buffer
+let videoComecou = false;
+let inicioGravacao = 0;      // performance.now() em que a gravação do vídeo começou
+let desloc = null;           // tempo do vídeo = tempo do áudio enviado + desloc
+let ultimaLimpeza = 0;
+const fila = [];             // todas as frases recebidas, em ordem (as antigas ficam para o "voltar")
+let prox = 0;                // posição em "fila" da próxima frase a aparecer
+const GUARDA = 180;          // segundos de vídeo já visto que ficam guardados para voltar
+let atual = null;            // frase sendo falada agora
+let sumirLegenda = 0;
+let relogioPosicao;
+let pausado = false;         // o usuário pausou nesta página
+let deslocado = false;       // já houve pausa: o vídeo segue de onde parou, mais atrás do ao vivo
+let cheio = 0;               // quando o buffer de vídeo recusou dados por falta de espaço
+
+const atraso = () => +$("atraso").value;
+function definirEstado(texto, classe = "") { estado.textContent = texto; estado.className = classe; }
+function avisar(texto) { aviso.textContent = texto; }
+const limitar = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ------------------------------------------------- vídeo atrasado (MediaSource)
+function tipoDeVideo() {
+  return ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/webm;codecs=h264,opus"]
+    .find(t => MediaRecorder.isTypeSupported(t) && MediaSource.isTypeSupported(t));
+}
+function alimentarBuffer() {
+  if (!buffer || buffer.updating || fonte.readyState !== "open") return;
+  if (cheio) {               // buffer lotado (pausa longa): libera o que já foi visto e tenta de novo
+    const b = video.buffered;
+    const visto = b.length ? video.currentTime - b.start(0) : 0;   // sacrifica primeiro o trecho guardado para voltar
+    if (visto > 4) { cheio = 0; buffer.remove(0, visto > 40 ? b.start(0) + 30 : video.currentTime - 3); return; }
+    if (performance.now() - cheio < 1000) return;
+  }
+  if (pedacos.length) {
+    const p = pedacos.shift();
+    try { buffer.appendBuffer(p); cheio = 0; }
+    catch (e) {
+      if (e.name === "QuotaExceededError") { pedacos.unshift(p); cheio = performance.now(); }   // espera na memória
+      else avisar("Erro no vídeo: " + e.message);
+    }
+  } else if (video.currentTime - ultimaLimpeza > 30) {   // libera memória do que já passou
+    ultimaLimpeza = video.currentTime;
+    if (video.currentTime > GUARDA + 5) buffer.remove(0, video.currentTime - GUARDA);
+    // frases de trechos que já saíram do buffer não voltam mais: libera os áudios
+    const inicioGuardado = (video.buffered.length ? video.buffered.start(0) : 0) - desloc;
+    while (prox > 0 && fila[0].fim < inicioGuardado - GUARDA) {
+      if (fila[0].url) URL.revokeObjectURL(fila[0].url);
+      fila.shift(); prox--;
+    }
+  }
+}
+function fimDoBuffer() {
+  const b = video.buffered;
+  return b.length ? b.end(b.length - 1) : 0;
+}
+
+// mantém o vídeo exatamente "atraso" segundos atrás do ao vivo
+function controlarVideo() {
+  const b = video.buffered;
+  if (!b.length || pausado) return;
+  if (deslocado) {           // depois de uma pausa não corre atrás do ao vivo: nada da aula é pulado
+    video.playbackRate = 1;
+    if (video.paused) video.play().catch(() => {});
+    return;
+  }
+  const alvo = fimDoBuffer() - atraso();
+  if (!videoComecou) {
+    if (alvo < b.start(0)) {
+      espera.textContent = `Sincronizando… o vídeo começa em ${Math.ceil(b.start(0) - alvo)} s`;
+      return;
+    }
+    video.currentTime = alvo;
+    video.play().catch(() => {});
+    videoComecou = true;
+    espera.style.display = "none";
+    return;
+  }
+  const erro = alvo - video.currentTime;        // > 0: o vídeo ficou para trás
+  if (erro > 3 || erro < -8) video.currentTime = Math.max(b.start(0), alvo);
+  else video.playbackRate = erro > 0.25 ? 1.1 : erro < -0.25 ? 0.75 : 1;
+  if (video.paused) video.play().catch(() => {});
+}
+
+// ------------------------------------------------- fala sincronizada
+// instante do áudio original (em segundos) que está na tela agora
+const tempoNaTela = () => video.currentTime - desloc;
+
+function mostrarNoHistorico(f) {
+  $("ajuda")?.remove();
+  const item = document.createElement("div"); item.className = "item";
+  const pt = document.createElement("div"); pt.className = "pt"; pt.textContent = f.pt || "(sem tradução)";
+  const en = document.createElement("div"); en.className = "en"; en.textContent = f.en;
+  item.append(pt, en);
+  historico.append(item);
+  while (historico.children.length > 60) historico.firstChild.remove();
+  historico.scrollTop = historico.scrollHeight;
+}
+
+function comecarFrase(f, comVoz) {
+  const agora = tempoNaTela();
+  legenda.textContent = f.pt;
+  sumirLegenda = Infinity;
+  if (!f.noHistorico) { f.noHistorico = true; mostrarNoHistorico(f); }   // ao voltar o vídeo não repete
+  if (!comVoz) {                                 // só legenda
+    sumirLegenda = Math.max(f.fim, agora + 1.5) + 0.8;
+    return;
+  }
+  atual = f;
+  f.som.currentTime = f.a;                       // pula o silêncio do começo do arquivo
+  f.som.playbackRate = ritmo;
+  f.som.volume = $("volPt").value;
+  f.som.onended = f.som.onerror = () => terminarFrase(f);
+  f.som.play().catch(() => terminarFrase(f));
+}
+function terminarFrase(f) {
+  if (atual !== f) return;
+  f.som.pause();
+  atual = null;
+  sumirLegenda = tempoNaTela() + 0.8;
+}
+
+// Ritmo da voz. Em vez de espremer cada frase no seu próprio espaço (o que dava
+// trechos a 2x seguidos de silêncio), a voz pode ficar até FOLGA segundos atrás da
+// imagem e usa as pausas do professor para se recuperar. O ritmo é um só para todas
+// as frases que estão esperando e muda aos poucos.
+const FOLGA = 1.5, RITMO_MAX = 1.5;
+let ritmo = 1;
+const duracaoDaFala = f => f.som ? f.b - f.a : f.pt.length / 15;   // sem a voz ainda: estima
+function ritmoNecessario(agora) {
+  const itens = fila.slice(prox).filter(f => !f.semVoz);
+  let trabalho = 0, alvo = 0;
+  if (atual) { trabalho = atual.b - atual.som.currentTime; itens.unshift(atual); }
+  itens.forEach((f, i) => {
+    if (f !== atual) trabalho += duracaoDaFala(f);
+    const prazo = (itens[i + 1] ? itens[i + 1].inicio : f.fim) + FOLGA - agora;
+    alvo = Math.max(alvo, prazo > 0.3 ? trabalho / prazo : 9);
+  });
+  return limitar(alvo, +$("vel").value, RITMO_MAX);
+}
+
+function controlarFala() {
+  if (desloc === null || !videoComecou || pausado) return;
+  const agora = tempoNaTela();
+  ritmo += limitar(ritmoNecessario(agora) - ritmo, -0.01, 0.02);   // no máx. +0,5x por segundo
+  if (atual) {
+    atual.som.playbackRate = ritmo;
+    if (atual.som.currentTime >= atual.b) terminarFrase(atual);    // corta o silêncio do fim
+  }
+  if (!atual && agora > sumirLegenda) legenda.textContent = "";
+  const f = fila[prox];
+  if (!f || atual || agora < f.inicio) return;
+  const querVoz = $("falar").checked && f.pt && !f.semVoz;
+  if (querVoz && !f.som && agora < f.inicio + 6) return;           // a voz ainda não chegou
+  // atrasou demais e já há outras frases esperando: esta fica só na legenda
+  const tardeDemais = agora - f.inicio > 6 && fila.length - prox > 1;
+  prox++;
+  comecarFrase(f, !!(querVoz && f.som && !tardeDemais));
+}
+
+// onde a fala realmente começa e termina dentro do arquivo (ele vem com silêncio nas pontas)
+async function limitesDaFala(bytes) {
+  try {
+    const pcm = await mixador.decodeAudioData(bytes.buffer.slice(0));
+    const x = pcm.getChannelData(0), sr = pcm.sampleRate;
+    let i = 0, j = x.length - 1;
+    while (i < j && Math.abs(x[i]) < 0.02) i++;
+    while (j > i && Math.abs(x[j]) < 0.02) j--;
+    return [Math.max(0, i / sr - 0.03), j / sr + 0.1];
+  } catch (e) { return [0, Infinity]; }
+}
+
+function receber(ev) {
+  const m = JSON.parse(ev.data);
+  if (m.tipo === "legenda") {
+    fila.push({ ...m, som: null, semVoz: !$("falar").checked || !m.pt });
+  } else if (m.tipo === "voz") {
+    const f = fila.find(x => x.id === m.id);
+    if (!f) return;
+    const bytes = Uint8Array.from(atob(m.audio), c => c.charCodeAt(0));
+    f.url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+    const som = new Audio(f.url);
+    som.preload = "auto";
+    const carregado = new Promise((ok, falha) => { som.onloadedmetadata = ok; som.onerror = falha; });
+    Promise.all([limitesDaFala(bytes), carregado]).then(([[a, b]]) => {
+      f.a = a;
+      f.b = Math.min(b, isFinite(som.duration) ? som.duration : 1e9);
+      f.som = som;
+    }).catch(() => { f.semVoz = true; });
+    // chegou depois da hora? então o atraso do vídeo está curto demais
+    const tarde = videoComecou ? tempoNaTela() - f.inicio : -1;
+    if (tarde > 0.1 && $("auto").checked) {
+      $("atraso").value = Math.min(20, atraso() + tarde + 1);
+      $("atraso").oninput();
+    }
+  } else if (m.tipo === "semvoz") {
+    const f = fila.find(x => x.id === m.id);
+    if (f) f.semVoz = true;                      // não espera uma voz que não vem
+  } else if (m.tipo === "estado") {
+    if (m.atraso > 8) definirEstado(`computador sobrecarregado (${m.atraso}s na fila)`, "atrasado");
+    else definirEstado("traduzindo", "ativo");
+  } else if (m.tipo === "aviso") avisar(m.texto);
+}
+
+$("atraso").oninput = () => { $("vAtraso").textContent = atraso().toFixed(1) + " s"; };
+$("vel").oninput = () => { $("vVel").textContent = (+$("vel").value).toFixed(2) + "x"; };
+$("volPt").oninput = () => { if (atual) atual.som.volume = $("volPt").value; };
+$("volEn").oninput = () => { video.volume = $("volEn").value; };
+$("voz").onchange = $("falar").onchange = enviarConfig;
+function enviarConfig() {
+  if (ws?.readyState === 1) ws.send(JSON.stringify({ voz: $("voz").value, falar: $("falar").checked }));
+  if (!$("falar").checked && atual) { atual.som.pause(); terminarFrase(atual); }
+}
+// Pausa local: a aba do curso continua tocando e sendo gravada; esta página para a
+// imagem e a voz e depois continua do mesmo ponto.
+function alternarPausa() {
+  if (!rodando || !videoComecou) return;
+  pausado = !pausado;
+  if (pausado) { deslocado = true; video.pause(); atual?.som.pause(); }
+  else { video.play().catch(() => {}); atual?.som.play().catch(() => {}); }
+  $("pausa").textContent = pausado ? "▶ Continuar" : "⏸ Pausar";
+  $("pausado").hidden = !pausado;
+}
+$("pausa").onclick = $("palco").onclick = alternarPausa;
+
+// Voltar e avançar dentro do que está gravado nesta página: para trás até GUARDA segundos,
+// para a frente até o ponto mais recente que já tem tradução (o "ao vivo" menos o atraso).
+const pontoRecente = () => fimDoBuffer() - atraso();
+function pular(segundos) {
+  if (!rodando || !videoComecou || !video.buffered.length) return;
+  const inicio = video.buffered.start(0) + 0.5, recente = Math.max(inicio, pontoRecente());
+  const t = limitar(video.currentTime + segundos, inicio, recente);
+  deslocado = t < recente - 0.5;                 // chegou ao mais recente: volta a acompanhar a aula
+  if (atual) { atual.som.pause(); atual = null; }
+  video.currentTime = t;
+  // retoma as frases a partir da primeira que ainda não terminou nesse ponto
+  prox = fila.findIndex(f => f.fim > t - desloc);
+  if (prox < 0) prox = fila.length;
+  legenda.textContent = ""; sumirLegenda = 0;
+  mostrarPosicao();
+}
+function mostrarPosicao() {
+  const atras = deslocado ? Math.max(0, pontoRecente() - video.currentTime) : 0;
+  const m = Math.floor(atras / 60), seg = String(Math.floor(atras % 60)).padStart(2, "0");
+  $("posicao").textContent = `${m}:${seg} atrás`;
+  $("posicao").hidden = $("recente").hidden = atras < 1;
+}
+$("voltar").onclick = () => pular(-10);
+$("avancar").onclick = () => pular(10);
+$("recente").onclick = () => pular(Infinity);
+document.addEventListener("keydown", ev => {
+  if (!rodando || /^(INPUT|SELECT|BUTTON|TEXTAREA)$/.test(ev.target.tagName)) return;
+  if (ev.code === "Space") alternarPausa();
+  else if (ev.code === "ArrowLeft") pular(-10);
+  else if (ev.code === "ArrowRight") pular(10);
+  else return;
+  ev.preventDefault();
+});
+$("telaCheia").onclick = () => document.fullscreenElement ? document.exitFullscreen() : $("palco").requestFullscreen();
+$("palco").ondblclick = $("telaCheia").onclick;
+
+// ------------------------------------------------- captura
+async function iniciar() {
+  avisar("");
+  const tipo = tipoDeVideo();
+  if (!tipo) { avisar("Este navegador não consegue gravar o vídeo da aba. Use Chrome ou Edge atualizado."); return; }
+  try {
+    const opcoes = {
+      video: { frameRate: 20, width: { max: 1920 }, height: { max: 1080 } },
+      audio: { suppressLocalAudioPlayback: true, restrictOwnAudio: true,
+               echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      systemAudio: "include", selfBrowserSurface: "exclude",
+    };
+    let controle = null;
+    if (window.CaptureController) opcoes.controller = controle = new CaptureController();
+    stream = await navigator.mediaDevices.getDisplayMedia(opcoes);
+    try { controle?.setFocusBehavior("no-focus-change"); } catch (e) {}   // continua nesta página
+  } catch (e) { avisar("Captura cancelada."); return; }
+
+  const faixaSom = stream.getAudioTracks()[0], faixaVideo = stream.getVideoTracks()[0];
+  if (!faixaSom) {
+    stream.getTracks().forEach(t => t.stop());
+    avisar("Nenhum áudio foi compartilhado. Clique em Iniciar de novo, escolha a aba do curso e " +
+           "marque “Compartilhar também o áudio da guia”.");
+    return;
+  }
+  faixaSom.onended = faixaVideo.onended = parar;
+  rodando = true;
+
+  // O áudio original toca junto com o vídeo atrasado, no volume escolhido. Isso só fica
+  // bom se o navegador silenciou a aba original (acontece ao compartilhar uma aba).
+  const silenciada = faixaSom.getSettings().suppressLocalAudioPlayback === true;
+  video.muted = !silenciada;
+  video.volume = $("volEn").value;
+  if (!silenciada) avisar("Você compartilhou uma janela ou a tela inteira: o som original continua tocando " +
+    "ao vivo, adiantado em relação a este vídeo. Para sincronizar tudo, compartilhe a ABA do curso.");
+
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = receber;
+  ws.onclose = () => { if (rodando) { avisar("A conexão com o servidor caiu. A janela do iniciar.bat ainda está aberta?"); parar(); } };
+  await new Promise(ok => { ws.onopen = ws.onerror = ok; });
+  if (ws.readyState !== 1) { avisar("Não consegui conectar ao servidor local."); parar(); return; }
+  enviarConfig();
+
+  // vídeo: grava em pedaços e reproduz com atraso
+  fonte = new MediaSource();
+  video.src = URL.createObjectURL(fonte);
+  await new Promise(ok => fonte.addEventListener("sourceopen", ok, { once: true }));
+  buffer = fonte.addSourceBuffer(tipo);
+  buffer.addEventListener("updateend", alimentarBuffer);
+  // O som gravado passa por um mixador com uma fonte muda sempre ligada: sem isso, quando
+  // a aba fica em silêncio a gravação para de receber áudio e o vídeo congela.
+  mixador = new AudioContext();
+  const saidaMix = mixador.createMediaStreamDestination();
+  mixador.createMediaStreamSource(new MediaStream([faixaSom])).connect(saidaMix);
+  const mudez = mixador.createConstantSource(); mudez.offset.value = 0;
+  mudez.connect(saidaMix); mudez.start();
+  gravador = new MediaRecorder(new MediaStream([faixaVideo, saidaMix.stream.getAudioTracks()[0]]),
+                               { mimeType: tipo, videoBitsPerSecond: 3_000_000 });
+  let ordem = Promise.resolve();
+  gravador.ondataavailable = ev => {
+    ordem = ordem.then(() => ev.data.arrayBuffer()).then(b => { pedacos.push(b); alimentarBuffer(); });
+  };
+  gravador.onstart = () => { inicioGravacao = performance.now(); };
+
+  // áudio: 16 kHz mono para o servidor transcrever
+  ctx = new AudioContext({ sampleRate: 16000 });
+  await ctx.audioWorklet.addModule("captura.js");
+  const no = new AudioWorkletNode(ctx, "captura", { channelCount: 1, channelCountMode: "explicit" });
+  const mudo = ctx.createGain(); mudo.gain.value = 0;
+  ctx.createMediaStreamSource(new MediaStream([faixaSom])).connect(no).connect(mudo).connect(ctx.destination);
+  no.port.onmessage = ev => {
+    if (desloc === null && inicioGravacao) desloc = (performance.now() - 100 - inicioGravacao) / 1000;
+    if (desloc === null) return;                 // espera a gravação do vídeo começar
+    const f = ev.data, pcm = new Int16Array(f.length);
+    let soma = 0;
+    for (let i = 0; i < f.length; i++) {
+      const v = limitar(f[i], -1, 1);
+      pcm[i] = v * 32767; soma += v * v;
+    }
+    $("medidor").firstElementChild.style.width = Math.min(100, Math.sqrt(soma / f.length) * 400) + "%";
+    if (ws?.readyState === 1) ws.send(pcm.buffer);
+  };
+  gravador.start(200);
+
+  relogio = setInterval(() => { alimentarBuffer(); controlarVideo(); controlarFala(); }, 40);
+  relogioPosicao = setInterval(mostrarPosicao, 500);
+  $("palco").classList.add("ativo");
+  espera.style.display = ""; espera.textContent = "Sincronizando…";
+  $("telaCheia").hidden = $("pausa").hidden = $("voltar").hidden = $("avancar").hidden = false;
+  botao.textContent = "Parar"; botao.className = "parar";
+  definirEstado("ouvindo", "ativo");
+}
+
+function parar() {
+  rodando = false;
+  clearInterval(relogio);
+  try { if (gravador?.state !== "inactive") gravador.stop(); } catch (e) {}
+  stream?.getTracks().forEach(t => t.stop());
+  ctx?.close(); mixador?.close(); ws?.close();
+  if (atual) { atual.som.pause(); atual = null; }
+  video.pause(); video.removeAttribute("src"); video.load();
+  stream = ctx = mixador = ws = gravador = fonte = buffer = null;
+  fila.forEach(f => f.url && URL.revokeObjectURL(f.url));
+  pedacos = []; fila.length = 0;
+  pausado = deslocado = false; cheio = 0;
+  $("pausa").hidden = $("pausado").hidden = $("voltar").hidden = $("avancar").hidden = true;
+  $("posicao").hidden = $("recente").hidden = true; $("pausa").textContent = "⏸ Pausar";
+  clearInterval(relogioPosicao);
+  prox = 0;
+  ritmo = 1; videoComecou = false; desloc = null; inicioGravacao = 0; ultimaLimpeza = 0;
+  legenda.textContent = "";
+  $("palco").classList.remove("ativo");
+  $("telaCheia").hidden = true;
+  $("medidor").firstElementChild.style.width = 0;
+  botao.textContent = "Iniciar"; botao.className = "";
+  definirEstado("parado");
+}
+
+botao.onclick = () => rodando ? parar() : iniciar();
+if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaSource)
+  avisar("Este navegador não permite capturar abas. Use Chrome ou Edge.");
+</script>
+</body>
+</html>
